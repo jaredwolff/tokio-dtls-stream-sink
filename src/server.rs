@@ -5,6 +5,7 @@ use crate::udp::stream::UdpStream;
 use core::pin::Pin;
 use openssl::ssl::{Ssl, SslContext};
 use std::io::{Error as StdError, ErrorKind, Result};
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
 use tokio_openssl::SslStream;
@@ -38,9 +39,16 @@ impl Server {
                 let peer = s.peer();
                 if let Some(ctx) = &tls {
                     let mut dtls = SslStream::new(Ssl::new(&ctx)?, s)?;
-                    Pin::new(&mut dtls).accept().await.map_err(|_| {
-                        StdError::new(ErrorKind::ConnectionReset, "Error during TLS handshake")
-                    })?;
+
+                    let connect = Pin::new(&mut dtls).accept();
+                    if let Err(e) = tokio::time::timeout(Duration::from_millis(10), connect).await?
+                    {
+                        return Err(StdError::new(
+                            ErrorKind::ConnectionReset,
+                            format!("Error during TLS handshake: {}", e),
+                        ));
+                    };
+
                     Ok(Session::new_dtls(dtls, peer))
                 } else {
                     Ok(Session::new_udp(s, peer))
